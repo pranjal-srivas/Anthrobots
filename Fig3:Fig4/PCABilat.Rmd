@@ -1,0 +1,83 @@
+---
+title: "PCA"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggbiplot)
+library(ks)
+library(NbClust)
+library(ggpubr)
+```
+
+
+```{r pca}
+mypcadat <- read_csv("/Users/pranjal/Desktop/Programming/Gizem Custom Tools/Cilia Coverage/Bilat2.csv")
+```
+
+```{r pca}
+val <- ncol(mypcadat)
+mypcadat <- mypcadat[,c(-9,-10,-11)]
+mypcadat <- mypcadat[complete.cases(mypcadat), ]
+mypcadat$Type <- factor(mypcadat$Type)
+mypcadat
+pca <- prcomp(mypcadat[,c(-1,-2,-3)], center = TRUE,scale = TRUE)
+summary(pca)
+```
+
+```{r pca}
+ggbiplot::ggbiplot(pca, groups = mypcadat$Type)
+comp <- data.frame(pca$x)
+```
+ 
+
+```{r pca}
+res <- NbClust(comp, method = "ward.D2", max.nc=13, index = "all") #alpha value
+```
+
+
+
+
+```{r pca}
+nrow(comp)
+hc <- hclust(dist(comp), "ward.D2")
+memb <- cutree(hc, k = 2)
+g <- ggbiplot::ggbiplot(pca, choices = 1:2, groups =  as.factor(memb), ellipse = TRUE, ellipse.prob = 0.9) + xlim(-3.5,3.5)
+g
+g+geom_point(aes(shape=factor(mypcadat$Type)), size = 1.25)
+
+```
+
+```{r pca}
+rawdatfin <- mypcadat[,c(-1,-2,-3)]
+#rawdatfin$members <- mypcadat2$Category
+#rawdatfin <- filter(rawdatfin, members != "Mover")
+colnam <- colnames(mypcadat[,c(-1,-2,-3)])
+#rawdatfin <- as.data.frame(apply(rawdatfin,2, function(x) x/max(x)))
+rawdatfin$members <- as.factor(memb)#memb#mypcadat2$Category#mypcadat$Type
+finalgrid <- pivot_longer(rawdatfin, colnam, "Key")
+```
+
+```{r pca}
+p <- ggplot(finalgrid, aes(x = members, y = value, fill = members)) + geom_boxplot() +
+facet_wrap(~Key, scales="free_y", strip.position = "left")
+my_comparisons <- list(c("1", "2"))#, c("2", "3"), c("1", "3") )
+p
+p+stat_compare_means(aes(label = ..p.signif..), method = "wilcox.test",vjust = 0.4, hjust = -1.1)
+rawdatfin <- as.data.frame(rawdatfin)
+colnames(rawdatfin) <- str_replace_all(colnames(rawdatfin), " ", "")
+compare_means(c(BilatStatMean, BilatStatMedian, Diff/Tot, Diff, Tot) ~ members, comparisons = my_comparisons, method='wilcox.test', data = rawdatfin, p.adjust.method = "holm")
+```
+
+
+
+
+
+
+
+
+
+
+
