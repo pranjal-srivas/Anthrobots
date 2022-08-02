@@ -1,0 +1,64 @@
+---
+title: "TravAnalysis"
+output: html_document
+---
+
+Load packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggpmisc)
+```
+
+## R Markdown
+
+Read data from where we jotted it down in Traversal.csv. 
+
+```{r pca}
+dat <- read_csv("Traversal.csv")
+```
+
+Cleans the data and picks correlation with the larger absolute value.
+
+```{r pca}
+abs_max <- function(data) {
+  tmp <- Filter(is.numeric, data)
+  if(inherits(data, "tbl_df")) {
+    tmp <- as.matrix(tmp)
+  }
+  tmp[cbind(1:nrow(tmp), max.col(replace(x <- abs(tmp), is.na(x), -Inf)))]
+}
+dat$true <- abs_max(data.frame(Up = dat$`Up 1`, Low = dat$`Low 1`))
+dat$st2 <- dat$Straightness^2
+dat$gy2 <- dat$Gyration^2
+dat <- dat[complete.cases(dat),]
+```
+
+```{r}
+m0 <- lm(true~poly(Gyration,2) +Straightness, dat)
+summary(m0)
+```
+
+Plot the linear portion 
+
+```{r pca}
+getpred <- function(m0, x){
+  pred <- m0$coefficients[1]+(m0$coefficients[4]*x)
+  return(pred)
+}
+predicted_df <- data.frame(Straightness = seq(1.6,2,0.05), y = getpred(m0,seq(1.6,2,0.05)))
+
+g2 <- ggplot(dat, aes(x = Straightness, y = true))+ geom_point()+geom_line(data= predicted_df, aes(x = Straightness, y = y), color = "blue")+
+  xlab("Scar Irregularity") + ylab("Scar-Trajectory Correlation")
+g2
+```
+
+Plot the gyration portion 
+```{r pca}
+g3 <- ggplot(dat, aes(x = Gyration, y = true))+ geom_point()+geom_smooth(formula = y~poly(x,2), method = "lm", se = FALSE)+
+  xlab("Gyration") + ylab("Scar-Trajectory Correlation")
+
+g3
+
+```
+
