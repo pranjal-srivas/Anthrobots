@@ -1,0 +1,28 @@
+---
+title: "Fig1"
+output: pdf_document
+---
+
+Load packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## R Markdown
+
+This part loads the data. 
+
+```{r}
+newbot <- read.csv("rawData.csv")
+```
+
+This part plots the data with standard functions. The error and everything else has been calculated already
+so we can easily plot the data over time. 
+
+```{r}
+newbot$Type <- as.factor(newbot$Label)
+g2 <- ggplot(newbot, aes(x = as.numeric(Days), y = as.numeric(PercentMoving))) + geom_line(aes(color = Type))+geom_errorbar(aes(ymin = as.numeric(PercentMoving)-as.numeric(Error), ymax = as.numeric(PercentMoving)+as.numeric(Error)), width=.1)+geom_point(size = 0.2)+ylab("Percent Moving")+xlab("Days")
+g2
+```
