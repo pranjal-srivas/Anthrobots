@@ -1,0 +1,85 @@
+---
+title: "Step2:Scar-Trajectory Correlation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(pracma)
+library(SimilarityMeasures)
+library(swaRm)
+```
+
+## R Markdown
+
+Read the data, including Method 2 and 3. 
+
+```{r pressure}
+dat <- read_lines("Plate29bot3passage3onneurons2.txt") #5-01-2021 (14) #Circular2 #BotsonNeuron2
+indices <- which(str_detect(dat, "Line"))
+centreline <- data.frame(col1 = dat[indices[1]:(indices[2]-1)])
+lowerline <- data.frame(col1 = dat[indices[2]:(indices[3]-1)])
+upperline <- data.frame(col1 = dat[indices[3]:(indices[4]-1)])
+met2 <- data.frame(col1 = dat[indices[4]:(indices[5]-1)])
+met3 <- data.frame(col1 = dat[indices[5]:length(dat)])
+```
+
+Clean the data
+
+```{r pressure}
+upper2num <- matrix(as.numeric(str_extract_all(upperline, "(-)?[0-9]+(\\.[0-9]+)?")[[1]]), ncol = 2, byrow = TRUE)
+lower2num <- matrix(as.numeric(str_extract_all(lowerline, "(-)?[0-9]+(\\.[0-9]+)?")[[1]]), ncol = 2, byrow = TRUE)
+centre2num <- matrix(as.numeric(str_extract_all(centreline, "(-)?[0-9]+(\\.[0-9]+)?")[[1]]), ncol = 2, byrow = TRUE)
+met2num <- matrix(as.numeric(str_extract_all(met2, "(-)?[0-9]+(\\.[0-9]+)?")[[1]]), ncol = 2, byrow = TRUE)
+met3num <- matrix(as.numeric(str_extract_all(met3, "(-)?[0-9]+(\\.[0-9]+)?")[[1]]), ncol = 2, byrow = TRUE)
+```
+
+Plot all the data
+
+```{r pressure}
+full <- bind_rows(as.data.frame(centre2num),as.data.frame(met2num),as.data.frame(met3num), as.data.frame(lower2num), as.data.frame(upper2num))
+full$Type <- c(rep("centre",nrow(centre2num)),rep("Met2",nrow(met2num)),rep("Met3",nrow(met3num)), rep("Lower",nrow(lower2num)), rep("upper",nrow(upper2num)))
+ggplot(full, aes(x = V1, y = V2)) + geom_point(aes(colour = Type))
+```
+
+```{r pressure}
+lowerdf <- as.data.frame(lower2num)
+botdf <- as.data.frame(centre2num)
+upperdf <- as.data.frame(upper2num)
+upperdf
+lowerdf
+botdf
+```
+
+This code shows us the correlation with both walls. 
+
+```{r pressure}
+low1 <- cor.test(heading(lowerdf$V1, lowerdf$V2), heading(botdf$V1, botdf$V2))$estimate
+up1 <- cor.test(heading(upperdf$V1, upperdf$V2), heading(botdf$V1, botdf$V2))$estimate
+c(up1,low1)
+```
+
+This code calculates the straightness index by calculating the sum of the ratio of the length between endpoints to the lenth of the entire scar for both the upper and lower walls. 
+
+
+```{r pressure}
+library(sf)
+val <- st_linestring(upper2num)
+plot(val)
+endp <- st_coordinates(val)[c(1,nrow(upper2num)),]
+upp <- as.matrix(dist(endp))[1,2]/st_length(val)
+val2 <- st_linestring(lower2num)
+endp2 <- st_coordinates(val2)[c(1,nrow(lower2num)),]
+low <- as.matrix(dist(endp2))[1,2]/st_length(val2)
+low+upp
+```
+
+
+
+
+
+
+
+
