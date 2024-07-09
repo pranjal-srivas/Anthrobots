@@ -1,0 +1,59 @@
+---
+title: "Fig 6"
+output: html_document
+---
+
+Load Packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(rstatix)
+library(tidyverse)
+```
+
+## R Markdown
+
+This portion loads the required files. 
+
+```{r}
+scarraw <- as.data.frame(read.csv("ScarRaw.csv")) 
+```
+
+Then we adjust the order of the columns in the first line and get rid of empty columns. Then we coerce the columns into rows by creating a "Key" that all columns from same row are associated with. This makes it easier to plot the data.  
+
+```{r}
+scarraw <- scarraw[complete.cases(scarraw),]
+colnames(scarraw) <- c("Bridge", "Neuron", "Adjacent", "Far")
+scarraw2 <- pivot_longer(scarraw, colnames(scarraw), names_to = "Key")
+```
+
+This calculates the t-test of the columns in "scarraw.csv". Note, you can change to wilcoxon by changing the command to rstatix::wilcoxon_test and remove the p-adjustment by rewriting "holm" to "none". We then choose the comparisons we care about (the 1st, 2nd, 4th and 5th rows) then we change the y.position argument so our p-values appear where we wish. 
+
+```{r}
+df_p_val <- rstatix::t_test(scarraw2, value~Key, p.adjust.method = "holm") %>% 
+  rstatix::add_xy_position()
+df_p_val <-df_p_val[c(1,2,4,5),]
+df_p_val$group1 <- as.factor(df_p_val$group1)
+df_p_val$group2 <- as.factor(df_p_val$group2)
+df_p_val$y.position <- rev(df_p_val$y.position)
+df_p_val$y.position[2] <- df_p_val$y.position[4]
+df_p_val$y.position[c(1,3)] <- rev(df_p_val$y.position[c(1,3)])
+df_p_val$y.position[3] <- df_p_val$y.position[3]-0.15
+df_p_val
+```
+
+This chunk plots the scarraw2 dataframe while using stat_summary() command to create columns and error bars. This command is used instead of geom_col() or geom_errorbar() since the data has been pivoted to a longer format, since it is far easier to plot the p-value comparisons in this format.  
+
+```{r}
+library(ggprism)
+g<- ggplot(scarraw2, aes(x = factor(Key,c("Bridge", "Neuron", "Adjacent", "Far")) , y = value)) + stat_summary(geom = "col", fun = mean, aes(fill = Key, color = "black")) + 
+  stat_summary(geom = "errorbar", 
+               fun = mean,
+               fun.min = function(x) mean(x) - sd(x),
+               fun.max = function(x) mean(x) + sd(x),
+               width = 0.3) + add_pvalue(df_p_val, 
+               label = "p.adj.signif")+ylab("Neuron Pixel Density")+xlab("Area")
+g
+```
+
+
