@@ -1,0 +1,623 @@
+---
+title: "Bilateral Symmetry"
+output: pdf_document
+---
+
+Load the packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(alphashape3d)
+#library(alphahull)
+library(tidyverse)
+library(concaveman)
+library(plyr)
+library(pracma)
+library(sp)
+library(reticulate)
+library(pdist)
+library(rgl)
+library(dbscan)
+library(compare)
+library(geometry)
+library(matrixStats)
+library(ptinpoly)
+library(cluster)
+library(wordspace)
+library(Rvcg)
+library(pdqr)
+#library(readobj)
+options(scipen = 999)
+```
+
+## Clear data and begin Python
+
+```{r cars}
+rm(list = ls())
+```
+
+```{r cars}
+use_condaenv(condaenv = '/opt/miniconda3', required = TRUE)
+```
+
+Load python packages
+
+```{python}
+from natsort import os_sorted
+import numpy as np
+import pandas as pd
+from PIL import Image, ImageFilter
+from readlif.reader import LifFile
+import matplotlib.pyplot as plt
+from PIL.ExifTags import TAGS
+from mpl_toolkits import mplot3d
+import math
+from operator import itemgetter
+import glob
+from matplotlib import image
+from numpy.linalg import inv, eig
+from scipy.spatial import ConvexHull
+from scipy.spatial.distance import cdist
+import os
+```
+
+Read the lif which usually has channel 0 unused, channel 1 Body and Channel 2 Cilia. Make sure the path to the lif itself is correct
+
+```{python ExtractLIFFile}
+new = LifFile('Movers/Circulars/TimelapseBots3.lif')
+# Access a specific image directly
+#This number is the number of bots. Each image is composed of x number of z slices of 3 channels
+img_list = [i for i in new.get_iter_image()]
+print(len(img_list))
+```
+
+In this chunk we specify bot which we want to pick from the lif which has multiple bots. Here 0 = 1st bot on lif, 1 = 2nd bot on lif etc. The variable to change is "botindexer". 
+
+```{python Getmetainfo}
+botindexer = 0
+img_0 = new.get_image(botindexer) 
+frame_list   = [i for i in img_0.get_iter_t(c=0, z=0)]
+z_list       = [i for i in img_0.get_iter_z(t=0, c=0)]
+channel_list = [i for i in img_0.get_iter_c(t=0, z=0)]
+print(len(frame_list), len(z_list), len(channel_list))
+```
+
+Set the relative path to your post-CiliaQ processed files here.
+
+```{python}
+images = [image.imread(file) for file in os_sorted(glob.glob("CQ Processed Read Code/TimelapseBots3/Cilia/Thirdfrombottomleft/*.tif"))] 
+print(len(images))
+```
+
+####OPTIONAL SECTION
+
+#------OPTIONAL CILIAQ BODY---------
+
+```{python}
+images2 = [image.imread(file) for file in os_sorted(glob.glob("/Users/pranjal/Desktop/CQ Processed Read Code/OP2Movers_2Morphotypes/Body/0CiliaPole/*.tif"))] 
+print(len(images2))
+```
+
+#------OPTIONAL ALTERNATIVE CILIA IMPORT---------
+
+```{python}
+images = [image.imread(file) for file in os_sorted(glob.glob("RightBotaTubThresholded/*.tif"))] 
+print(len(images))
+z_list = len(images)
+```
+
+#------OPTIONAL ALTERNATIVE BODY IMPORT---------
+
+```{python}
+images2 = [image.imread(file) for file in os_sorted(glob.glob("RightBotShellThresholded/*.tif"))] 
+print(len(images))
+```
+
+####END
+
+This gets rid of any additional dimension in your tif file that may be accidentally present. 
+
+```{python}
+for i in range(0, len(images)):
+  images[i] = images[i][:,:,2] #Removes extra dimension in Cilia
+  #images2[i] = images2[i][:,:,2] #Removes extra dimension in body 
+```
+
+
+This chunk of code reads in the cilia from the available binarized files after CiliaQ has processed them (or they have been otherwise binarized).The jump tells us how many images we should jump, so a jump of 0 means don't skip any z-level, but a jump of 2 means get every third z-level, etc.  
+
+```{python computeallinfocilia}
+alllis = []
+jump = 0
+for pic in range(0,len(images),(jump+1)): 
+    arr = images[pic]
+    im = Image.fromarray(arr)
+    im2 = im.filter(ImageFilter.MedianFilter(size = 3))
+    arr = np.array(im2)
+    coords = np.argwhere(arr>0)
+    z_col = np.full(len(coords),pic)
+    coords2 = np.c_[coords,z_col]
+    alllis.append(coords2)
+final = np.concatenate(alllis)
+print(len(final))
+print(final[1])
+zseq = [x for x in range(0,len(images),3)]
+```
+
+####OPTIONAL SECTION
+
+Read bot body binarized file if needed. 
+
+```{python}
+alllis2 = []
+ct = 0
+jump = 0
+for pic in range(0,len(images2),(jump+1)): 
+    ct = ct + 1
+    arr = images2[pic]
+    im = Image.fromarray(arr)
+    im2 = im.filter(ImageFilter.MedianFilter(size = 5))
+    arr = np.array(im2)
+    coords = np.argwhere(arr>0)
+    z_col = np.full(len(coords),pic)
+    coords2 = np.c_[coords,z_col]
+    alllis2.append(coords2)
+final2 = np.concatenate(alllis2)
+print(len(final2))
+print(final2[1])
+```
+
+####END
+
+    
+The chunks below until the start of the R markdown define and then calculate the body for each z-slice. The jump method is same as the cilia.Then below we save the data as dataframes for both binarized cilia and body and subtract the cilia from the body. The intersecting points are also noted for potential future use. 
+
+```{python definefuncs2}
+def get_th2(arr):
+    lis = []
+    for rate in range(5,16):
+        rate = rate *0.01
+        for midpoint in range(119,131,2):
+            midpoint = midpoint+0.5
+            arr = 255/(1+np.exp(-float(rate)*(arr-float(midpoint))))
+            arr2 = np.round(arr)
+            preval = np.count_nonzero(arr2)
+            im = Image.fromarray(arr2)
+            im2 = im.filter(ImageFilter.MedianFilter(size = 5))
+            arr3 = np.array(im2)
+            postval = np.count_nonzero(arr3)
+            if postval == 0:
+                continue
+            ratio = ((preval-postval)/postval)
+            lis.append((rate,midpoint,ratio))
+    return((min(lis,key=itemgetter(2))[0], min(lis,key=itemgetter(2))[1]))
+    
+            
+def getnonzerocoords3(im, mytuple):
+    arr2 = np.array(im)
+    arr3 = 255/(1+np.exp(-mytuple[0]*(arr2-mytuple[1])))
+    arr3 = np.round(arr3)
+    arr32 = np.where(arr3 > 1, 255, arr3)
+    im3 = Image.fromarray(arr32)
+    im2 = im3.filter(ImageFilter.MedianFilter(size = 5))
+    arr4 = np.array(im2)
+    points = np.argwhere(arr4>1)
+    return(points)
+        
+def getnonzerocoords2(im, mytuple):
+    arr2 = np.array(im)
+    arr3 = 255/(1+np.exp(-mytuple[0]*(arr2-mytuple[1])))
+    arr3 = np.round(arr3)
+    arr32 = np.where(arr3 > 1, 255, arr3)
+    im3 = Image.fromarray(arr32)
+    im2 = im3.filter(ImageFilter.MedianFilter(size = 19))
+    arr4 = np.array(im2)
+    points = np.argwhere(arr4>1)
+    return(points)
+```        
+
+
+
+```{python computeallinfobody}
+alllis2 = []
+ct = 0
+jump = 0
+for z in range(0,len(z_list),(jump+1)):
+    frame_body = img_0.get_frame(z=z, t=0, c=1)
+    arr_body = np.array(frame_body)
+    my_th = get_th2(arr_body)
+    coords = getnonzerocoords2(frame_body, my_th)
+    z_col = np.full(len(coords),z)
+    coords2 = np.c_[coords,z_col]
+    alllis2.append(coords2)
+    ct = ct + 1
+#print(my_th)
+
+final2 = np.concatenate(alllis2)
+print(len(final2))
+print(final2[1])
+```
+
+```{python removeciliapoints}
+aset = set([tuple(x) for x in final])
+bset = set([tuple(x) for x in final2])
+finaler2 = np.array(list(bset-aset))
+intersect = list(aset.intersection(bset))
+z_list = ct
+```
+
+```{python createthedfifcila}
+final4 = pd.DataFrame(finaler2)
+final3 = pd.DataFrame(final)
+imlen = len(images)
+```
+
+
+```{python createthedf}
+print(len(final))
+print(len(finaler2))
+print(len(intersect))
+final5 = pd.DataFrame(intersect)
+```
+
+
+## R Markdown
+
+This reads the python body dataframe to R
+
+```{r definedata}
+mydat <- py$final4
+colnames(mydat)<-c("x","y","z")
+```
+
+This reads the python cilia dataframe to R
+
+```{r definedata}
+cilia_real <- py$final3
+colnames(cilia_real)<-c("x","y","z")
+```
+
+This chunk lists the dimensions to convert from pixel to microns. 
+
+```{r createthedf}
+listz <- py$z_list
+corr_factorcilia = 0.3839581
+corr_factorbody = 0.3839581
+corr_factorzcilia = 2.99834
+corr_factorzbody = 2.99834
+```
+
+The chunks below do the actual conversion to microns with a change in the viewing angle. 
+
+
+```{r createthedf}
+cilia_realpros <- cilia_real
+cilia_realpros$x = (cilia_real$y)*(corr_factorcilia)
+cilia_realpros$y = (cilia_real$x)*(corr_factorcilia)
+cilia_realpros$z = (cilia_real$z)*(corr_factorzcilia)
+```
+
+```{r createthedf}
+mydatpros <- mydat
+mydatpros$x = (mydat$y)*(corr_factorbody)
+mydatpros$y = (mydat$x)*(corr_factorbody)
+mydatpros$z = (mydat$z)*(corr_factorzbody)
+```
+
+Now we can see what a sample binarized will look like:
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(mydatpros, (x)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+There are two cases that trigger alternative checkpoints. If the cilia is incorrect and clearly overexposed i.e spread all over the body instead of only in the places where it should be, that means CiliaQ did not binarize the cilia properly. It is suggested to go back to the original lif, extract the cilia channel again and then apply CiliaQ with different parameters or after contrasting manually. However, this is not always possible, especially when processing a large amount of bots. In most overexposure cases, the issue is the body is assigned as cilia along with the actual cilia. A quick fix is to run the code under Checkpoint 1 which removes the common points between body and cilia from cilia and reinitializes the cilia variable.   
+
+Alternatively there may be debris or other bots that have also been detected in the field of view of the bot. To remove these, find the equations(s) that keep only the bot area we want to keep (maybe after playing with the equations like I did when I created the Eqn column in AllMov4 under All350bots.xlsx). This equation can be substituted after the comma in the both the filter expression under Checkpoint 2, and then we can Run Checkpoint 2. 
+
+*CHECKPOINT 1*
+
+```{r definedata}
+intersect <- py$final5
+colnames(intersect)<-c("x","y","z")
+cilia_real <- anti_join(cilia_real, intersect)
+```
+
+```{r createthedf}
+cilia_realpros <- cilia_real
+cilia_realpros$x = (cilia_real$x-511)*(-corr_factorcilia)
+cilia_realpros$y = (cilia_real$y-511)*(-corr_factorcilia)
+cilia_realpros$z = (cilia_real$z-py$imlen)*(-corr_factorzcilia)
+```
+
+*END*
+
+*CHECKPOINT 2*
+
+```{r optional}
+mydatpros <- filter(mydatpros, (x)>(0))
+cilia_realpros <- filter(cilia_realpros,  (x)>(0))
+```
+
+*END*
+
+This is the final binarized image. This should resemble the actual bot higly both in terms of cilia and body. 
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(mydatpros, (x)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+Now, the body will have hundreds of thousands to even millions of pixels in the binarized version. We need to simplify this for memory considerations and speed of calculations. We do this by getting the concave hull as below. 
+
+```{r compactusingconcaveman}
+newmydat <- data.frame(mydatpros)
+newdat2 <- newmydat %>% group_by(z) %>% dplyr::group_map(~data.frame(c(.x,.y)))
+count <- length(unique(mydat$z))
+fin_list <- vector(mode = "list", length = count)
+for (i in 1:length(newdat2)) {
+  mat1 <- data.matrix(newdat2[[i]])
+  output <- concaveman(mat1, 1,0.0001)
+  fin_list[[i]] <- data.frame(output)
+}
+done <- rbind.fill(fin_list)
+colnames(done) <- c("x","y","z")
+done
+```
+
+View post concave hull
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(done, (y)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+Now we project all the cilia onto the body, z-slice by z-slice. This code works if jump = 0, otherwise it has to be modified to change the "zthreshtop" and "zthreshbottom" to values that reflect the jump value. 
+
+```{r optional 1 micron}
+testnum<- floor(listz/1)
+listziter <- listz/testnum
+testnum <- py$z_list
+remain <- vector(mode = "list", length=testnum)
+for(i in 0:(testnum-1)){
+  zthreshbot <- i*(listziter*corr_factorzcilia)
+  zthreshtop <- (i+1)*(listziter*corr_factorzcilia)
+  minicil <- as.matrix(filter(cilia_realpros, between(z,zthreshbot, zthreshtop)))
+  minidat <- as.matrix(filter(done, between(z,zthreshbot, zthreshtop)))
+  comps <- try(apply(pdist2(minicil, minidat), 1, which.min))
+  if(class(comps) == "try-error"){
+     remain[[i+1]] <- matrix(c(-1,-1,-1), nrow = 1, ncol = 3)
+  }else{
+     remain[[i+1]] <- minidat[unique(comps),]
+  }
+  print(i)
+}
+```
+
+If all the z-slices had cilia to project (no red error message), run only code A under Checkpoint 3. If not all the z-slices have cilia to project (there is a red error message) and the z-slice numbered 0 (the first z-slice) has the error message, run only code B under Checkpoint 3. Otherwise, run code C under Checkpoint 3. In all cases, confirm you get a matrix of values with 3 columns after running A, B or C. 
+
+*Checkpoint 3*
+
+A
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal
+head(ciliamatrealtrue)
+```
+
+B
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal[,4:6] #[1:3]
+ciliamatrealtrue <- ciliamatrealtrue[complete.cases(ciliamatrealtrue),]
+head(ciliamatrealtrue)
+```
+
+C
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal[,1:3]
+ciliamatrealtrue <- ciliamatrealtrue[complete.cases(ciliamatrealtrue),]
+head(ciliamatrealtrue)
+```
+
+*END*
+
+Now we define the coordinates of the plane we get from the Bilateral symmetry 3 points pipeline, and create a plane with that. 
+
+```{r}
+myplanepoints <- as.data.frame(matrix(c(167.6354383219243, 229.81215653220306, 46.0, 95.30577750301848, 376.4443754875819, 14.0, 105.42655978255425, 459.44717152956315, 70.0), byrow = TRUE, ncol = 3))
+colnames(myplanepoints) <- c("x", "y", "z")
+myplanepoints$z <- myplanepoints$z*corr_factorzbody
+myplanepoints
+```
+
+```{r}
+planeeqndirec <- function(tricoord) {
+ u <- as.numeric(tricoord[2,]) - as.numeric(tricoord[1,])
+ v <- as.numeric(tricoord[3,]) - as.numeric(tricoord[1,])
+ n <- cross(u,v)
+ d <- -dot(n,as.numeric(tricoord[1,]))
+ return(c(n,d,as.numeric(tricoord[1,])))
+}
+
+getkey <- function(P, keyplane) {
+ n <- keyplane[1:3]
+ d <- keyplane[4]
+ w <- as.numeric(P) - as.numeric(keyplane[5:7])
+ fin <- dot(w,n)
+ return(fin)
+}
+
+planeproject <- function(P, n, tricoord1) {
+        n_norm <- n / sqrt(sum(n^2))
+        projp <- P-dot(as.numeric(P) - tricoord1, n_norm)*n_norm
+        return(projp)
+}
+keyplane <- planeeqndirec(myplanepoints)
+```
+
+Now we decide on which side of the plane each point is, and what it's coordinates will be when projected onto the bilateral plane. 
+
+```{r}
+projpoints <- vector(length = 4*nrow(ciliamatrealtrue))
+for(i in 1:nrow(ciliamatrealtrue)){
+        val <- getkey(ciliamatrealtrue[i, ], keyplane)
+        projpoi <- planeproject(ciliamatrealtrue[i,], keyplane[1:3], keyplane[5:7])
+        projpoints[(4*i-3):(4*i)] <- matrix(c(projpoi, val), nrow = 1, ncol = 4)
+}
+```
+
+
+```{r}
+fin_coords <- unlist(projpoints)
+fin_coords <- as.data.frame(matrix(fin_coords, ncol = 4, byrow = TRUE))
+colnames(fin_coords) <- c("x", "y", "z", "key")
+head(fin_coords)
+```
+
+Here we can see the number of points on each side as well as their difference. 
+
+```{r}
+A <- filter(fin_coords, key > 0)[,c(1,2,3)]
+B <- filter(fin_coords, key < 0)[, c(1,2,3)]
+head(A)
+diffstot <- abs(nrow(A)-nrow(B))/nrow(fin_coords)
+diffs <- abs(nrow(A)-nrow(B))
+tots <- nrow(A)+nrow(B)
+diffstot
+diffs
+tots
+```
+
+Here we can see the cilia and the plane as a check. 
+
+```{r}
+rgl.points(as.matrix(cilia_realpros), color = "red")
+rgl.points(myplanepoints, color = "blue", size = 20)
+rgl.planes(a = keyplane[1], b = keyplane[2], c = keyplane[3], d = keyplane[4])
+axes3d('z', color = "green")
+axes3d('x', color = "black")
+axes3d('y')
+```
+
+Here we define a function to project onto the xy plane (get rid of z)
+
+```{r}
+planexy2 <- function(P, n, d) {
+        n <- n/sqrt(sum(n^2))
+        sums <- sum(n^2)
+        sq <- sqrt(sums)
+        a <- n[1]
+        b <- n[2]
+        c <- n[3]
+        x11 <- (b^2/(a^2 + b^2)) + (1-(b^2/(a^2 + b^2)))*c/sq
+        x12 <- a*b*(1-(c/sq))
+        x13 <- -a/sq
+        x21 <- x12
+        x22 <- (a^2/(a^2 + b^2)) + (1-(a^2/(a^2 + b^2)))*c/sq
+        x23 <- -b/sq
+        x31 <- a/sq
+        x32 <- b/sq
+        x33 <- c/sq
+        trans <- matrix(c(c(x11,x12,x13), c(x21,x22,x23), c(x31,x32,x33)), nrow = 3, byrow = TRUE)
+        fincoord <- trans %*% P
+        return(c(fincoord))
+}
+```
+
+
+By default run portion A of Checkpoint 3. If the plot of the two sides of the bot seems to be smushed or altered i.e. appears like a line instead of the shape of the bot due the transformation to the xy plane,use section B and confirm it looks better. Otherwise skip B.  
+
+*Checkpoint 3*
+
+A
+
+```{r}
+mat2 <- as.matrix(A)
+mat3 <- as.matrix(B)
+for(i in 1:nrow(A)){
+  mat2[i,] <- planexy2(as.numeric(A[i,]), keyplane[1:3], keyplane[4])
+}
+for(i in 1:nrow(B)){
+  mat3[i,] <- planexy2(as.numeric(B[i,]), keyplane[1:3], keyplane[4])
+}
+```
+
+```{r}
+open3d()
+x <- c(mat2[,1], mat3[,1])
+y <- c(mat2[,2], mat3[,2])
+z <- c(mat2[,3], mat3[,3]+1)
+plot3d(x, y, z, type = "s", col = c(rep("red", nrow(mat2)), rep("blue", nrow(mat3))), size = 0.3)
+```
+
+B
+
+```{r}
+A2 <- A
+A2[,2] <- -A[,3]
+A2[,3] <- A[,2]
+B2 <- B
+B2[,2] <- -B[,3]
+B2[,3] <- B[,2]
+mat2 <- as.matrix(A2)
+mat3 <- as.matrix(B2)
+matrot <- matrix(c(1,0,0,0,0,-1,0,1,0), nrow = 3, byrow = T)
+matrot
+for(i in 1:nrow(A)){
+  mat2[i,] <- planexy2(as.numeric(A2[i,]), matrot%*%keyplane[1:3], keyplane[4])
+}
+for(i in 1:nrow(B)){
+  mat3[i,] <- planexy2(as.numeric(B2[i,]), matrot%*%keyplane[1:3], keyplane[4])
+}
+```
+
+```{r}
+open3d()
+x <- c(mat2[,1], mat3[,1])
+y <- c(mat2[,2], mat3[,2])
+z <- c(mat2[,3], mat3[,3]+1)
+plot3d(x, y, z, type = "s", col = c(rep("red", nrow(mat2)), rep("blue", nrow(mat3))), size = 0.3)
+```
+
+*END*
+
+
+This calculates our modified Chamfer metric with the mean and median as methods to indicate the centre. It creates a Spatial tree to the nearest neighbor and calculates that distance  
+
+```{r}
+L <- SpatialPoints(A)
+R <- SpatialPoints(B)
+tree <- createTree(coordinates(L))
+inds <- knnLookup(tree, newdat=coordinates(R), k=1)
+cham <- t(sapply(seq_len(nrow(inds)), function(i) spDists(R[i, ], L[inds[i, ],])))
+cham1 <- mean(cham)
+cham11 <- median(cham)
+tree2 <- createTree(coordinates(R))
+inds2 <- knnLookup(tree2, newdat=coordinates(L), k=1)
+chamt <- t(sapply(seq_len(nrow(inds2)), function(i) spDists(L[i, ], R[inds2[i, ],])))
+cham2 <- mean(chamt)
+cham22 <- median(chamt)
+meanval <- cham1+cham2 #mean
+medval <- cham11+cham22 #median
+meanval
+medval
+```
+
+all variables that go in Bilat Symmetry excel in one place:
+
+```{r}
+finvec <- c(meanval,medval, diffstot, diffs, tots)
+finvec
+```
+
+
+##END
+

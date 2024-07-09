@@ -1,0 +1,273 @@
+---
+title: "PCA"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggbiplot)
+library(GGally)
+library(varrank)
+library(ggpubr)
+library(factoextra)
+library(NbClust)
+```
+
+```{r pca}
+linstats <- read_csv("LinearStatsBilat.csv")
+linstats2 <- read_csv("LinearStatsBilatBody2.csv")
+circstats <- read_csv("CircularStatsBilat.csv")
+circstats2 <- read_csv("CircularStatsBilatBody2.csv")
+```
+
+```{r pca}
+#Linear
+names <- c("Mean Method", "Median Method", "Point Difference", "Point difference over total points")
+for(i in 0:3){
+  print(paste0("",i+1,"",":", names[i+1]))
+  temp <- linstats2[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- wilcox.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = TRUE, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = TRUE, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = TRUE, conf.level = 0.95)
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+  if(i == 2){
+  temp <- as.data.frame(temp)
+colnames(temp) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+gg1 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 45 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "KS Statistic for Distance between Body Points and Centre") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "greater"), label.x.npc = "right", vjust = 1.5)
+    gg2 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 90 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "KS Statistic for Distance between Body Points and Centre") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "greater"), label.x.npc = "right", vjust = 1.5)
+    gg3 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 135 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "KS Statistic for Distance between Body Points and Centre") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "greater"), label.x.npc = "right", vjust = 1.5)
+  }
+}
+ggsave("linbody45.svg", gg1)
+ggsave("linbody90.svg", gg2)
+ggsave("linbody135.svg", gg3)
+#Modified Chamfer Distance Symmetry Metric
+gg1
+gg2
+gg3
+  
+```
+
+```{r pca}
+#Circular
+library(ggpubr)
+for(i in 0:3){
+  print(paste0("",i+1,"",":", names[i+1]))
+  temp <- circstats[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- wilcox.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+  if(i == 0){
+  
+  temp <- as.data.frame(temp)
+colnames(temp) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+ gg1 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 45 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "Modified Chamfer Distance Symmetry Metric") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "less"), label.x.npc = "right", vjust = 2)
+    gg2 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 90 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "Modified Chamfer Distance Symmetry Metric") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "less"), label.x.npc = "right", vjust = 1.5)
+    gg3 <- ggpaired(temp, cond1 = "Movement Axis", cond2 = "Axis - 135 Degree Offset", color = "condition", line.color = "gray", line.size = 0.4,
+palette = "npg", xlab = "Plane of Symmetry", ylab = "Modified Chamfer Distance Symmetry Metric") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "less"), label.x.npc = "right", vjust = 3)
+
+  }
+}
+
+
+ggsave("circcilia45.svg", gg1)
+ggsave("circcilia90.svg", gg2)
+ggsave("circcilia135.svg", gg3)
+#Modified Chamfer Distance Symmetry Metric
+gg1
+gg2
+gg3
+  
+```
+
+
+```{r pca}
+#Circular
+library(ggpubr)
+for(i in 0:3){
+  #print(paste0("",i+1,"",":", names[i+1]))
+  temp <- circstats2[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- wilcox.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+  
+  
+  #print(paste0("",i+1,"",":", names[i+1]))
+  temp2 <- linstats2[,((4*i)+1):((4*i)+4)]
+  print(head(temp2))
+  res1 <- wilcox.test(pull(temp2[,1]), pull(temp2[,2]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp2[,1]), pull(temp2[,3]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp2[,1]), pull(temp2[,4]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+
+  if(i == 2){
+  
+  temp <- as.data.frame(temp)
+  temp2 <- as.data.frame(temp2)
+
+colnames(temp) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+colnames(temp2) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+temp$Type <- "Circular Bot Body"
+temp2$Type <- "Linear Bot Body"
+final <- rbind(temp, temp2)
+gger <- ggplot(final) + geom_boxplot(aes(x = Type, y = `Axis - 90 Degree Offset`-`Movement Axis`, fill = Type)) + ylab("Change in Asymmetry between 90 Degree Offset and Movement Axes") + annotate(geom="text", x=1, y=0.5, label="p = 0.94")+ annotate(geom="text", x=2, y=0.5, label="p = 0.88")
+print(final)
+
+  }
+}
+
+gger
+ggsave("BodyDiffplot.svg", gger)
+```
+
+```{r pca}
+#Circular
+library(ggpubr)
+for(i in 0:3){
+  #print(paste0("",i+1,"",":", names[i+1]))
+  temp <- circstats[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- wilcox.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "greater", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Circulars' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+  
+  
+  #print(paste0("",i+1,"",":", names[i+1]))
+  temp2 <- linstats[,((4*i)+1):((4*i)+4)]
+  print(head(temp2))
+  res1 <- wilcox.test(pull(temp2[,1]), pull(temp2[,2]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res2 <- wilcox.test(pull(temp2[,1]), pull(temp2[,3]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  res3 <- wilcox.test(pull(temp2[,1]), pull(temp2[,4]), paired = TRUE, alternative = "less", mu = 0.0, 
+      exact = TRUE, correct = FALSE, conf.int = F, conf.level = 0.95)
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Linears' Wilcoxon comparison between Movement axis and 135 degree: ",res3$p.value))
+
+  if(i == 0){
+  
+  temp <- as.data.frame(temp)
+  temp2 <- as.data.frame(temp2)
+
+colnames(temp) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+colnames(temp2) <- c("Movement Axis", "Axis - 45 Degree Offset", "Axis - 90 Degree Offset", "Axis - 135 Degree Offset")
+temp$Type <- "Circular Bot Cilia"
+temp2$Type <- "Linear Bot Cilia"
+
+final <- rbind(temp, temp2)
+
+t.test((filter(final, final$Type == "Linear Bot Cilia") %>% mutate(key = `Axis - 90 Degree Offset`-`Movement Axis`))$key)
+t.test((filter(final, final$Type == "Circular Bot Cilia") %>% mutate(key = `Axis - 90 Degree Offset`-`Movement Axis`))$key)
+
+gger <- ggplot(final) + geom_boxplot(aes(x = Type, y = `Axis - 90 Degree Offset`-`Movement Axis`, fill = Type)) + ylab("Change in Asymmetry between 90 Degree Offset and Movement Axes") + annotate(geom="text", x=1, y=6, label="p = 0.0482")+ annotate(geom="text", x=2, y=6, label="p = 0.1116")
+print(final)
+
+  }
+}
+
+gger
+ggsave("CiliaDiffplot2.svg", gger)
+```
+
+```{r pca}
+library(tidyverse)
+na.pad <- function(x,len){
+    x[1:len]
+}
+makePaddedDataFrame <- function(l,...){
+    maxlen <- max(sapply(l,length))
+    data.frame(lapply(l,na.pad,len=maxlen),...)
+}
+
+findat <- makePaddedDataFrame(list(`Circular Cilia Movement` = circstats$CircMean1, `Circular Cilia Perpendicular` = circstats$`CircMean 3`, `Linear Cilia Movement` = linstats$LinMean1, `Linear Cilia Perpendicular` = linstats$LinMean3, `Circular Body Movement` = circstats2$CircMean1, `Circular Body Perpendicular` = circstats2$`CircMean 3`, `Linear Body Movement` = linstats2$CircMean1, `Linear Body Perpendicular` = linstats2$`CircMean 3`))
+
+findat2 <- separate(pivot_longer(findat, cols = colnames(findat), names_to = "Key"), Key, c("Behavior", "Morphology", "Axis"),  extra = "merge")
+findat2 <- findat2[complete.cases(findat2), ]
+
+ggpaired(findat2, x = "Axis", y = "value", line.color = "gray", line.size = 0.4, facet.by = c("Behavior", "Morphology"), palette = "npg") + stat_compare_means(method = "wilcox.test", paired = TRUE, method.args = list(alternative = "greater"), label.x.npc = "center", vjust = 2)
+```
+
+
+```{r pca}
+#Linear
+for(i in 0:3){
+  print(paste0("",i+1,"",":", names[i+1]))
+  temp <- linstats[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- t.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "less", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  res2 <- t.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "less", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  res3 <- t.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "less", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  print(paste0("Pval for Linears' T-test comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Linears' T-test comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Linears' T-test comparison between Movement axis and 135 degree: ",res3$p.value))
+}
+  
+```
+
+```{r pca}
+#Circular
+for(i in 0:3){
+  print(paste0("",i+1,"",":", names[i+1]))
+  temp <- circstats2[,((4*i)+1):((4*i)+4)]
+  print(head(temp))
+  res1 <- t.test(pull(temp[,1]), pull(temp[,2]), paired = TRUE, alternative = "greater", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  res2 <- t.test(pull(temp[,1]), pull(temp[,3]), paired = TRUE, alternative = "greater", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  res3 <- t.test(pull(temp[,1]), pull(temp[,4]), paired = TRUE, alternative = "greater", mu = 0.0, var.equal = FALSE, conf.level = 0.95)
+  print(paste0("Pval for Circulars' T-test comparison between Movement axis and 45 degree: ",res1$p.value))
+  print(paste0("Pval for Circulars' T-test comparison between Movement axis and 90 degree: ",res2$p.value))
+  print(paste0("Pval for Circulars' T-test comparison between Movement axis and 135 degree: ",res3$p.value))
+}
+  
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

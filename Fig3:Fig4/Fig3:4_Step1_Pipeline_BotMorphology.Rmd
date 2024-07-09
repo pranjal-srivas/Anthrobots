@@ -1,0 +1,630 @@
+---
+title: "Pipeline: Bot Morphology"
+output: pdf_document
+---
+
+Load the packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(alphashape3d)
+#library(alphahull)
+library(tidyverse)
+library(concaveman)
+library(plyr)
+library(pracma)
+library(sp)
+library(reticulate)
+library(pdist)
+library(rgl)
+library(dbscan)
+library(compare)
+library(geometry)
+library(matrixStats)
+library(ptinpoly)
+library(cluster)
+library(wordspace)
+library(Rvcg)
+library(pdqr)
+#library(readobj)
+options(scipen = 999)
+```
+
+## Clear data and begin Python
+
+```{r cars}
+rm(list = ls())
+```
+
+```{r cars}
+use_condaenv(condaenv = '/opt/miniconda3', required = TRUE)
+```
+
+Load python packages
+
+```{python}
+from natsort import os_sorted
+import numpy as np
+import pandas as pd
+from PIL import Image, ImageFilter
+from readlif.reader import LifFile
+import matplotlib.pyplot as plt
+from PIL.ExifTags import TAGS
+from mpl_toolkits import mplot3d
+import math
+from operator import itemgetter
+import glob
+from matplotlib import image
+from numpy.linalg import inv, eig
+from scipy.spatial import ConvexHull
+from scipy.spatial.distance import cdist
+import os
+```
+
+Read the lif which usually has channel 0 unused, channel 1 Body and Channel 2 Cilia. Make sure the path to the lif itself is correct
+
+```{python ExtractLIFFile}
+new = LifFile('Movers/Circulars/TimelapseBots3.lif')
+# Access a specific image directly
+#This number is the number of bots. Each image is composed of x number of z slices of 3 channels
+img_list = [i for i in new.get_iter_image()]
+print(len(img_list))
+```
+
+In this chunk we specify bot which we want to pick from the lif which has multiple bots. Here 0 = 1st bot on lif, 1 = 2nd bot on lif etc. The variable to change is "botindexer". 
+
+```{python Getmetainfo}
+botindexer = 0
+img_0 = new.get_image(botindexer) 
+frame_list   = [i for i in img_0.get_iter_t(c=0, z=0)]
+z_list       = [i for i in img_0.get_iter_z(t=0, c=0)]
+channel_list = [i for i in img_0.get_iter_c(t=0, z=0)]
+print(len(frame_list), len(z_list), len(channel_list))
+```
+
+Set the relative path to your post-CiliaQ processed files here.
+
+```{python}
+images = [image.imread(file) for file in os_sorted(glob.glob("CQ Processed Read Code/TimelapseBots3/Cilia/Thirdfrombottomleft/*.tif"))] 
+print(len(images))
+```
+
+####OPTIONAL SECTION
+
+#------OPTIONAL CILIAQ BODY---------
+
+```{python}
+images2 = [image.imread(file) for file in os_sorted(glob.glob("/Users/pranjal/Desktop/CQ Processed Read Code/OP2Movers_2Morphotypes/Body/0CiliaPole/*.tif"))] 
+print(len(images2))
+```
+
+#------OPTIONAL ALTERNATIVE CILIA IMPORT---------
+
+```{python}
+images = [image.imread(file) for file in os_sorted(glob.glob("RightBotaTubThresholded/*.tif"))] 
+print(len(images))
+z_list = len(images)
+```
+
+#------OPTIONAL ALTERNATIVE BODY IMPORT---------
+
+```{python}
+images2 = [image.imread(file) for file in os_sorted(glob.glob("RightBotShellThresholded/*.tif"))] 
+print(len(images))
+```
+
+####END
+
+This gets rid of any additional dimension in your tif file that may be accidentally present. 
+
+```{python}
+for i in range(0, len(images)):
+  images[i] = images[i][:,:,2] #Removes extra dimension in Cilia
+  #images2[i] = images2[i][:,:,2] #Removes extra dimension in body 
+```
+
+
+This chunk of code reads in the cilia from the available binarized files after CiliaQ has processed them (or they have been otherwise binarized).The jump tells us how many images we should jump, so a jump of 0 means don't skip any z-level, but a jump of 2 means get every third z-level, etc.  
+
+```{python computeallinfocilia}
+alllis = []
+jump = 0
+for pic in range(0,len(images),(jump+1)): 
+    arr = images[pic]
+    im = Image.fromarray(arr)
+    im2 = im.filter(ImageFilter.MedianFilter(size = 3))
+    arr = np.array(im2)
+    coords = np.argwhere(arr>0)
+    z_col = np.full(len(coords),pic)
+    coords2 = np.c_[coords,z_col]
+    alllis.append(coords2)
+final = np.concatenate(alllis)
+print(len(final))
+print(final[1])
+zseq = [x for x in range(0,len(images),3)]
+```
+
+####OPTIONAL SECTION
+
+Read bot body binarized file if needed. 
+
+```{python}
+alllis2 = []
+ct = 0
+jump = 0
+for pic in range(0,len(images2),(jump+1)): 
+    ct = ct + 1
+    arr = images2[pic]
+    im = Image.fromarray(arr)
+    im2 = im.filter(ImageFilter.MedianFilter(size = 5))
+    arr = np.array(im2)
+    coords = np.argwhere(arr>0)
+    z_col = np.full(len(coords),pic)
+    coords2 = np.c_[coords,z_col]
+    alllis2.append(coords2)
+final2 = np.concatenate(alllis2)
+print(len(final2))
+print(final2[1])
+```
+
+####END
+
+    
+The chunks below until the start of the R markdown define and then calculate the body for each z-slice. The jump method is same as the cilia.Then below we save the data as dataframes for both binarized cilia and body and subtract the cilia from the body. The intersecting points are also noted for potential future use. 
+
+```{python definefuncs2}
+def get_th2(arr):
+    lis = []
+    for rate in range(5,16):
+        rate = rate *0.01
+        for midpoint in range(119,131,2):
+            midpoint = midpoint+0.5
+            arr = 255/(1+np.exp(-float(rate)*(arr-float(midpoint))))
+            arr2 = np.round(arr)
+            preval = np.count_nonzero(arr2)
+            im = Image.fromarray(arr2)
+            im2 = im.filter(ImageFilter.MedianFilter(size = 5))
+            arr3 = np.array(im2)
+            postval = np.count_nonzero(arr3)
+            if postval == 0:
+                continue
+            ratio = ((preval-postval)/postval)
+            lis.append((rate,midpoint,ratio))
+    return((min(lis,key=itemgetter(2))[0], min(lis,key=itemgetter(2))[1]))
+    
+            
+def getnonzerocoords3(im, mytuple):
+    arr2 = np.array(im)
+    arr3 = 255/(1+np.exp(-mytuple[0]*(arr2-mytuple[1])))
+    arr3 = np.round(arr3)
+    arr32 = np.where(arr3 > 1, 255, arr3)
+    im3 = Image.fromarray(arr32)
+    im2 = im3.filter(ImageFilter.MedianFilter(size = 5))
+    arr4 = np.array(im2)
+    points = np.argwhere(arr4>1)
+    return(points)
+        
+def getnonzerocoords2(im, mytuple):
+    arr2 = np.array(im)
+    arr3 = 255/(1+np.exp(-mytuple[0]*(arr2-mytuple[1])))
+    arr3 = np.round(arr3)
+    arr32 = np.where(arr3 > 1, 255, arr3)
+    im3 = Image.fromarray(arr32)
+    im2 = im3.filter(ImageFilter.MedianFilter(size = 19))
+    arr4 = np.array(im2)
+    points = np.argwhere(arr4>1)
+    return(points)
+```        
+
+
+
+```{python computeallinfobody}
+alllis2 = []
+ct = 0
+jump = 0
+for z in range(0,len(z_list),(jump+1)):
+    frame_body = img_0.get_frame(z=z, t=0, c=1)
+    arr_body = np.array(frame_body)
+    my_th = get_th2(arr_body)
+    coords = getnonzerocoords2(frame_body, my_th)
+    z_col = np.full(len(coords),z)
+    coords2 = np.c_[coords,z_col]
+    alllis2.append(coords2)
+    ct = ct + 1
+#print(my_th)
+
+final2 = np.concatenate(alllis2)
+print(len(final2))
+print(final2[1])
+```
+
+```{python removeciliapoints}
+aset = set([tuple(x) for x in final])
+bset = set([tuple(x) for x in final2])
+finaler2 = np.array(list(bset-aset))
+intersect = list(aset.intersection(bset))
+z_list = ct
+```
+
+```{python createthedfifcila}
+final4 = pd.DataFrame(finaler2)
+final3 = pd.DataFrame(final)
+imlen = len(images)
+```
+
+
+```{python createthedf}
+print(len(final))
+print(len(finaler2))
+print(len(intersect))
+final5 = pd.DataFrame(intersect)
+```
+
+
+## R Markdown
+
+This reads the python body dataframe to R
+
+```{r definedata}
+mydat <- py$final4
+colnames(mydat)<-c("x","y","z")
+```
+
+This reads the python cilia dataframe to R
+
+```{r definedata}
+cilia_real <- py$final3
+colnames(cilia_real)<-c("x","y","z")
+```
+
+This chunk lists the dimensions to convert from pixel to microns. 
+
+```{r createthedf}
+listz <- py$z_list
+corr_factorcilia = 0.3839581
+corr_factorbody = 0.3839581
+corr_factorzcilia = 2.99834
+corr_factorzbody = 2.99834
+```
+
+The chunks below do the actual conversion to microns with a change in the viewing angle. 
+
+```{r createthedf}
+cilia_realpros <- cilia_real
+cilia_realpros$x = (cilia_real$x-511)*(-corr_factorcilia)
+cilia_realpros$y = (cilia_real$y-511)*(-corr_factorcilia)
+cilia_realpros$z = (cilia_real$z-py$imlen)*(-corr_factorzcilia)
+```
+
+```{r createthedf}
+mydatpros <- mydat
+mydatpros$x = (mydat$x-511)*(-corr_factorbody)
+mydatpros$y = (mydat$y-511)*(-corr_factorbody)
+mydatpros$z = (mydat$z-py$imlen)*(-corr_factorzbody)
+```
+
+Now we can see what a sample binarized will look like:
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(mydatpros, (x)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+There are two cases that trigger alternative checkpoints. If the cilia is incorrect and clearly overexposed i.e spread all over the body instead of only in the places where it should be, that means CiliaQ did not binarize the cilia properly. It is suggested to go back to the original lif, extract the cilia channel again and then apply CiliaQ with different parameters or after contrasting manually. However, this is not always possible, especially when processing a large amount of bots. In most overexposure cases, the issue is the body is assigned as cilia along with the actual cilia. A quick fix is to run the code under Checkpoint 1 which removes the common points between body and cilia from cilia and reinitializes the cilia variable.   
+
+Alternatively there may be debris or other bots that have also been detected in the field of view of the bot. To remove these, find the equations(s) that keep only the bot area we want to keep (maybe after playing with the equations like I did when I created the Eqn column in AllMov4 under All350bots.xlsx). This equation can be substituted after the comma in the both the filter expression under Checkpoint 2, and then we can Run Checkpoint 2. 
+
+*CHECKPOINT 1*
+
+```{r definedata}
+intersect <- py$final5
+colnames(intersect)<-c("x","y","z")
+cilia_real <- anti_join(cilia_real, intersect)
+```
+
+```{r createthedf}
+cilia_realpros <- cilia_real
+cilia_realpros$x = (cilia_real$x-511)*(-corr_factorcilia)
+cilia_realpros$y = (cilia_real$y-511)*(-corr_factorcilia)
+cilia_realpros$z = (cilia_real$z-py$imlen)*(-corr_factorzcilia)
+```
+
+*END*
+
+*CHECKPOINT 2*
+
+```{r optional}
+mydatpros <- filter(mydatpros, (x)>(0))
+cilia_realpros <- filter(cilia_realpros,  (x)>(0))
+```
+
+*END*
+
+This is the final binarized image. This should resemble the actual bot higly both in terms of cilia and body. 
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(mydatpros, (x)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+Now, the body will have hundreds of thousands to even millions of pixels in the binarized version. We need to simplify this for memory considerations and speed of calculations. We do this by getting the concave hull as below. 
+
+```{r compactusingconcaveman}
+newmydat <- data.frame(mydatpros)
+newdat2 <- newmydat %>% group_by(z) %>% dplyr::group_map(~data.frame(c(.x,.y)))
+count <- length(unique(mydat$z))
+fin_list <- vector(mode = "list", length = count)
+for (i in 1:length(newdat2)) {
+  mat1 <- data.matrix(newdat2[[i]])
+  output <- concaveman(mat1, 1,0.0001)
+  fin_list[[i]] <- data.frame(output)
+}
+done <- rbind.fill(fin_list)
+colnames(done) <- c("x","y","z")
+done
+```
+
+View post concave hull
+
+```{r optional}
+rgl.points(filter(cilia_realpros, (x)>(0)), col = "light blue", size = 0.01)
+rgl.points(filter(done, (y)>(0)), col = "forest green", size = 0.01)
+axis3d('x')
+axis3d('y', color = "red")
+```
+
+Now we project all the cilia onto the body, z-slice by z-slice. This code works if jump = 0, otherwise it has to be modified to change the "zthreshtop" and "zthreshbottom" to values that reflect the jump value. 
+
+```{r optional 1 micron}
+testnum<- floor(listz/1)
+listziter <- listz/testnum
+testnum <- py$z_list
+remain <- vector(mode = "list", length=testnum)
+for(i in 0:(testnum-1)){
+  zthreshbot <- i*(listziter*corr_factorzcilia)
+  zthreshtop <- (i+1)*(listziter*corr_factorzcilia)
+  minicil <- as.matrix(filter(cilia_realpros, between(z,zthreshbot, zthreshtop)))
+  minidat <- as.matrix(filter(done, between(z,zthreshbot, zthreshtop)))
+  comps <- try(apply(pdist2(minicil, minidat), 1, which.min))
+  if(class(comps) == "try-error"){
+     remain[[i+1]] <- matrix(c(-1,-1,-1), nrow = 1, ncol = 3)
+  }else{
+     remain[[i+1]] <- minidat[unique(comps),]
+  }
+  print(i)
+}
+```
+
+If all the z-slices had cilia to project (no red error message), run only code A under Checkpoint 3. If not all the z-slices have cilia to project (there is a red error message) and the z-slice numbered 0 (the first z-slice) has the error message, run only code B under Checkpoint 3. Otherwise, run code C under Checkpoint 3. In all cases, confirm you get a matrix of values with 3 columns after running A, B or C. 
+
+*Checkpoint 3*
+
+A
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal
+head(ciliamatrealtrue)
+```
+
+B
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal[,4:6] #[1:3]
+ciliamatrealtrue <- ciliamatrealtrue[complete.cases(ciliamatrealtrue),]
+head(ciliamatrealtrue)
+```
+
+C
+```{r optional}
+ciliamatreal <- rbind.fill.matrix(remain)
+ciliamatrealtrue <- ciliamatreal[,1:3]
+ciliamatrealtrue <- ciliamatrealtrue[complete.cases(ciliamatrealtrue),]
+head(ciliamatrealtrue)
+```
+
+*END*
+
+Here we calculate the number of cilia points.  
+
+```{r optional}
+nrow(ciliamatrealtrue)
+cilpoints <- nrow(unique(as.data.frame(ciliamatrealtrue)))
+cilpoints
+```
+
+Here we calculate the Cilia Area (Not Used in PCA), Noise Points and Cluster (Not Used in PCA) variables
+
+```{r optional}
+mesh1 <- vcgBallPivoting(ciliamatrealtrue,radius = 0, clustering = 0.1)
+cilarea <-vcgArea(mesh1)
+meshInfo(mesh1)
+kNNdistplot(cilia_realpros,5)
+res <- dbscan(ciliamatrealtrue, 2)
+noise <- length(res$cluster[res$cluster == 0])
+clus <- length(unique(res$cluster))-1
+```
+
+##Major/Minor Axis, Ratio
+
+Here we calculate a lot of metrics derived from the ellipsoid hull. , like the aspect ratio which is the ratio of axes, or the longest radius, etc. This the Aspect, MaxRadius and Circularity (Not Used in PCA) are calculated here.
+```{r}
+useforellipsoid <- as.matrix(done)
+xs <- ellipsoidhull(useforellipsoid)
+vol_ellipsoid <- volume(xs)
+eigenv <- eigen(xs$cov)
+axes <- sqrt(eigenv$values)
+rad <-  (axes[1] * axes[2] *axes[3])^(1/3)
+row1 <- rad/axes
+row2 <- axes/rad
+mataxes <- matrix(c(row1,row2), byrow = TRUE, ncol = 3)
+axes
+longdiam <- max(axes)
+aspectratio <- longdiam/min(axes)
+circularity <- sum(mataxes[mataxes > 1])-3
+longdiam
+aspectratio
+circularity
+```
+
+##END
+
+Here we prepare to create the 3D mesh of the body. 
+
+```{r perturb}
+r <- nrow(done)
+colnames(done)<-c("x","y","z")
+done2 <- done
+pertx <- rnorm(r, mean=0, sd(done$x) * 10^-6)
+perty <- rnorm(r, mean=0, sd(done$y) * 10^-6)
+pertz <- rnorm(r, mean=0, sd(done$z) * 10^-6)
+done2$x <- done$x  + pertx
+done2$y <- done$y  + perty
+done2$z <- done$z  + pertz
+#done2 <- filter(done2, z>0.5)
+done2[1:10,]
+mydat2 <- data.matrix(done2)
+colnames(mydat2)<-NULL
+```
+
+Here we create the mesh, playing with the alphaval value to make sure the mesh forms a closed figure. In case it doesn't, the mesh value can be decreased or increased. For most bots, 20 works well. 
+
+```{r createalphaobject, echo=FALSE}
+alphaval <- 20
+myshape <- ashape3d(mydat2, alphaval, pert = FALSE)
+plot(myshape)
+```
+
+
+##Concavity
+
+Here we calculate Concavity, later called Shape Smoothness. 
+```{r plotalphaobject, echo=FALSE}
+vol_bot <- volume_ashape3d(myshape)
+concavity <- vol_bot/vol_ellipsoid
+concavity
+```
+
+
+##Surface Area
+
+Here we calculate Surface Area (Not Used in PCA). 
+```{r plotalphaobject, echo=FALSE}
+areas <- surfaceNormals(myshape)
+totsurfarea <- sum(apply(areas$normals, 1, Norm))
+totsurfarea
+```
+
+##Cilia / SA ratio
+
+Here we calculate CiliatoBodySurfaceAreaRatio (Not Used in PCA). 
+```{r plotalphaobject, echo=FALSE}
+ratiocilbod <- cilarea/totsurfarea
+ratiocilbod
+```
+
+##Rotational Symmetry of Cilia/ Grouped or Not a.k.a Polarity
+
+
+Here we calculate polarity. Essentiall we find the centroid of the bot (lines 534-572), subtract the centroid from all the projected Cilia Points to get vectors (line 573) and then calculate the ratio of "norm of the sum of vectors to the sum of the norm of the vectors" (lines 574-578).
+```{r extracttrianglecoords, echo=FALSE}
+mydat3 <- as.data.frame(mydat2)
+colnames(mydat3) <- c("x", "y", "z")
+triangs <- as.data.frame(myshape$triang)
+colnames(triangs)[9] <- "fc100"
+triangs <- filter(triangs, fc100 == 2)
+allind <- c(triangs[,1],triangs[,2],triangs[,3])
+in1 <- unique(allind)
+triangs <- unique(triangs[,1:3])
+triangs
+vertices <- mydat3[in1,]
+vertices
+colnames(vertices) <- c("x", "y", "z")
+areatriangle <- function(tricoord) {
+ u <- tricoord[1,] - tricoord[3,]
+ v <- tricoord[2,] - tricoord[3,]
+ n <- pracma::cross(u,v)
+ area <- norm(n, type = "2")/2
+ return(area)
+}
+trinumber <- nrow(triangs)
+tri_coords <- vector(mode = "list", length = trinumber)
+tri_areas <- vector(mode = "list", length = trinumber)
+for (i in 1:trinumber) {
+  tri_coords[[i]] <- mydat2[as.numeric(triangs[i,]),]
+}
+for (i in 1:trinumber) {
+  tri_areas[[i]] <- areatriangle(tri_coords[[i]])
+}
+vertices <- mydat2[in1,]
+tri_weights <- vector(mode = "list", length = trinumber)
+for (i in 1:trinumber) {
+  tri_weights[[i]] <- tri_areas[[i]]*colMeans(tri_coords[[i]])
+}
+tri_weights[[3]]
+mtrx <- matrix(unlist(tri_weights), ncol = 3, byrow = TRUE)
+truecentre <- colSums(mtrx)/totsurfarea
+truecentre2 <- c(mean(vertices[,1]),mean(vertices[,2]), mean(vertices[,3]))
+truecentre
+truecentre2
+ciliamatrealtrue_pros <- sweep(ciliamatrealtrue, 2, truecentre)
+final <- matrix(c(sum(ciliamatrealtrue_pros[,1]), sum(ciliamatrealtrue_pros[,2]), sum(ciliamatrealtrue_pros[,3])), ncol = 3)
+normofsum <- norm(final)
+sumnorm <- sum(rowNorms(ciliamatrealtrue_pros))
+pol <- normofsum/sumnorm
+pol
+```
+
+##Normality/ Sparseness
+
+Here we calculate Deviation from normal. We uniformly and randomply place an amount of points equal to the number of cilia points across the body of the bot (lines 586-609), then calculate the nearest neighbor for both the uniformly spread cilia and the original distribution of cilia (lines 610-611). Finally, we calculated the KS test statistic (lines 612-614).
+
+```{r sph}
+randpointtriangle <- function(tricoord) {
+ a <- tricoord[1,] - tricoord[3,]
+ b <- tricoord[2,] - tricoord[3,]
+ vals <- runif(2, min = 0, max = 1)
+ if(sum(vals)>1){
+   vals<-1-vals
+ }
+ w <- vals[1]*a + vals[2]*b
+ P <- w+tricoord[3,]
+ return(P)
+}
+
+tri_probs <- vector(length = trinumber)
+for (i in 1:trinumber) {
+  tri_probs[i] <- tri_areas[[i]]/totsurfarea
+}
+dfneed <- data.frame(x=1:trinumber, prob = tri_probs)
+r_trinum <- new_r(dfneed, type = "discrete")
+get_tri <- r_trinum(nrow(ciliamatrealtrue))
+rands <- vector(mode = "list", length = length(get_tri))
+for(n in 1:length(get_tri)){
+  rands[[n]] <- randpointtriangle(tri_coords[[get_tri[n]]])
+}
+normalmtrx <- matrix(unlist(rands), ncol = 3, byrow = TRUE)
+A <- kNN(normalmtrx,1)
+B <- kNN(ciliamatrealtrue,1)
+valks <- ks.test(A$dist,B$dist)
+dval <- valks$statistic
+dval
+```
+
+##DONE
+
+Here we present all the variables as they are supposed to be copy-pasted into our All350Bots.xlsx Excel format with a specific order of variables. The variables CilPoints/Area and Cilia Distribution Homogeneity are calculated on the fly here since they are simple manipulations of pre-calculated values. The variable names in order, are:
+
+Cilia SA, Cilia Points, Cilia Points/Area, Islands, Noise_Points, MaxRadius, Aspect, Circularity, Shape Smoothness, SurfaceArea, Cilia/Body Ratio, Polarity, Cilia Distribution Homogeneity, DeviationFromNormal
+
+
+```{r sph}
+theendmat <- c(cilarea, cilpoints, cilpoints/totsurfarea, clus,noise,longdiam,aspectratio,circularity,concavity,totsurfarea,ratiocilbod, pol,1-dval, dval)
+theendmat
+```
+
+
+##DONE

@@ -1,0 +1,137 @@
+---
+title: "R Notebook"
+output: 
+  html_notebook: 
+    fig_caption: yes
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+---
+
+# . Environment
+
+## . Libraries 
+
+We start by loading all the required packages in memory.
+
+```{r message=FALSE}
+library(readr)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(ggplot2)
+library(patchwork)
+library(ggfortify)
+library(scales)
+library(optimr)
+library(remotes)
+
+if (!require(trackdf, quietly = TRUE)) {
+  remotes::install_github("swarm-lab/trackdf")
+  library(trackdf)
+}
+
+if (!require(swaRm, quietly = TRUE)) {
+  remotes::install_github("swarm-lab/swaRm")
+  library(swaRm)
+}
+```
+
+## . Custom functions 
+
+```{r}
+my_trans <- function(x) {
+  cd <- function(x) {
+    M <- median(x, na.rm = TRUE)
+    mean(abs(x - M)) / M
+  }
+  
+  to_optim <- function(par, x) {
+    trans <- modulus_trans(par[1], par[2])
+    x_trans <- trans$transform(x)
+    cd(x_trans)
+  }
+  
+  opt <- optimr::optimr(c(-1, 1), to_optim, x = x, control = list(maximize = TRUE), method = "Rvmmin")
+  trans <- modulus_trans(opt$par[1], opt$par[2])$transform
+  trans(x)
+}
+
+dist2point <- function(x, y, centerx, centery) {
+  d_x <- x - centerx
+  d_y <- y - centery
+  sqrt(d_x ^ 2 + d_y ^ 2)
+}
+getdist <- function(x, y, maxdist) {
+print(typeof(maxdist))
+}
+
+dist2poly <- function(x, y, poly_x, poly_y) {
+  out <- matrix(NA, nrow = length(x), ncol = 1)
+  
+  for (i in 1:length(x)) {
+      out[i,] <- dist2point(x[i], y[i], poly_x[1], poly_y[1])
+  }
+  print(out)
+  return(out)
+}
+```
+
+---
+
+# . Data preparation 
+
+## . Import raw data
+
+The raw data is stored into the `Rawdata` folder of the project. It is
+composed of various `.csv` files containing trajectories of anthrobots, each file 
+corresponding to a replicate of the experiment under various conditions. There 
+is also an `info.xlsx` file that contains information about each `.csv` file, in
+particular the experimental condition, the age of the xenobots, and the scaling
+information to convert the X/Y coordinates from pixels to centimeters. 
+
+This code imports and converts the raw data into the appropriate format for the 
+analysis i.e a .rds file. This step can be ignored if the raw data has already been imported, converted, and saved. 
+
+```{r message=FALSE}
+rawdat <- tibble(file = list.files("Rawdata", "*.csv", full.names = TRUE)) %>%
+  group_by(., file) %>%
+  do(., read_csv(.$file, col_types = cols())) %>%
+  ungroup(.) %>%
+  mutate(., replicate = as.numeric(str_extract(file, "(?i)(?<=\\D)\\d+"))) %>%
+  mutate(., unique_id = paste0(replicate, "_", track_fixed)) %>%
+  group_by(., file, track_fixed, frame) %>%
+  dplyr::summarize(., x = mean(x),
+            y = mean(y),
+            replicate = replicate[1],
+            unique_id = unique_id[1],
+            ignore = all(ignore)) %>%
+  ungroup(.)
+
+infodat <- read_excel("info.xlsx") %>%
+  group_by(., replicate, condition, age, scale) %>%
+  do(., poly_y = str_extract_all(c(.$top_left),
+                                 "(\\d)+", simplify = TRUE)[, 2] %>%
+       as.numeric(.) / .$scale,
+     poly_x = str_extract_all(c(.$top_left, .$top_right),
+                              "(\\d)+", simplify = TRUE)[, 1] %>%
+       as.numeric(.) / .$scale) %>%
+  ungroup(.)
+
+full_dat <- full_join(rawdat, infodat, by = "replicate") %>%
+  mutate(., x = x / scale, y = y / scale) %>%
+  group_by(., replicate) %>%
+  mutate(., arena_dist = dist2point(x, y, poly_x[[1]][1], poly_y[[1]]), cutoff_dist = poly_x[[1]][2]) %>%
+  ungroup(.)
+
+tracks <- track_df(full_dat$x, full_dat$y, t = full_dat$frame,
+                   id = full_dat$unique_id, period = "2.5second",
+                   ignore = full_dat$ignore, file = full_dat$file,
+                   condition = full_dat$condition, age = full_dat$age,
+                   arena_dist = full_dat$arena_dist, cutoff_dist = full_dat$cutoff_dist)
+
+saveRDS(tracks, "data.rds")
+```
+
